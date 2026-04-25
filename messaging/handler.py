@@ -620,9 +620,8 @@ class ClaudeMessageHandler:
                     node_id, MessageState.ERROR, error_message="Cancelled by user"
                 )
         except Exception as e:
-            logger.error(
-                f"HANDLER: Task failed with exception: {type(e).__name__}: {e}"
-            )
+            # Top-level guard: bot must not crash on task failure.
+            logger.exception(f"HANDLER: Task failed with exception: {type(e).__name__}")
             error_msg = get_user_facing_error_message(e)[:200]
             transcript.apply({"type": "error", "message": error_msg})
             await update_ui(self.format_status("💥", "Task Failed"), force=True)

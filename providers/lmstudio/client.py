@@ -130,7 +130,8 @@ class LMStudioProvider(BaseProvider):
                         yield "\n"
 
             except Exception as e:
-                logger.error("{}_ERROR:{} {}: {}", tag, req_tag, type(e).__name__, e)
+                # Top-level stream guard: must not crash the request handler.
+                logger.exception("{}_ERROR:{} {}", tag, req_tag, type(e).__name__)
                 mapped_e = map_error(e)
                 if getattr(mapped_e, "status_code", None) == 405:
                     error_message = (

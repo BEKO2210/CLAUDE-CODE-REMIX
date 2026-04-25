@@ -11,7 +11,9 @@ try:
     import tiktoken
 
     ENCODER = tiktoken.get_encoding("cl100k_base")
-except Exception:
+except ImportError, OSError:
+    # ImportError: tiktoken not installed.
+    # OSError: encoder data file unreadable / network failure on first download.
     ENCODER = None
 
 
@@ -92,7 +94,7 @@ class ContentBlockManager:
         state.task_arg_buffer += args
         try:
             args_json = json.loads(state.task_arg_buffer)
-        except Exception:
+        except json.JSONDecodeError:
             return None
 
         if args_json.get("run_in_background") is not False:
@@ -115,7 +117,7 @@ class ContentBlockManager:
                 if args_json.get("run_in_background") is not False:
                     args_json["run_in_background"] = False
                 out = json.dumps(args_json)
-            except Exception as e:
+            except json.JSONDecodeError as e:
                 prefix = state.task_arg_buffer[:120]
                 logger.warning(
                     "Task args invalid JSON (id={} len={} prefix={!r}): {}",

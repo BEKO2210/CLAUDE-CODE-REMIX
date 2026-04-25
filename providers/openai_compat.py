@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
 import httpx
+import openai
 from loguru import logger
 from openai import AsyncOpenAI
 
@@ -21,6 +22,7 @@ from providers.common import (
     map_error,
     map_stop_reason,
 )
+from providers.exceptions import ProviderError
 from providers.rate_limit import GlobalRateLimiter
 
 
@@ -95,7 +97,10 @@ class OpenAICompatibleProvider(BaseProvider):
                 self._client.chat.completions.create, **body, stream=True
             )
             return stream, body
-        except Exception as error:
+        except (httpx.HTTPError, openai.APIError, ProviderError) as error:
+            # Only retry for transport / API errors that hint at a retryable
+            # body change (e.g. drop reasoning_effort on HTTP 405). Unknown
+            # exceptions bubble up unchanged.
             retry_body = self._get_retry_request_body(error, body)
             if retry_body is None:
                 raise
@@ -285,7 +290,11 @@ class OpenAICompatibleProvider(BaseProvider):
                                 yield event
 
             except Exception as e:
-                logger.error("{}_ERROR:{} {}: {}", tag, req_tag, type(e).__name__, e)
+                # Top-level stream guard: must not crash the request handler.
+                # Specific exceptions (httpx.HTTPError, openai.APIError, etc.)
+                # are mapped via map_error() below. CancelledError is a
+                # BaseException in Python 3.8+ and does not enter this branch.
+                logger.exception("{}_ERROR:{} {}", tag, req_tag, type(e).__name__)
                 mapped_e = map_error(e)
                 error_occurred = True
                 if getattr(mapped_e, "status_code", None) == 405:
