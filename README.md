@@ -37,7 +37,7 @@ A lightweight proxy that routes Claude Code's Anthropic API calls to **NVIDIA NI
 | **Heuristic Tool Parser**  | Models outputting tool calls as text are auto-parsed into structured tool use                   |
 | **Request Optimization**   | 5 categories of trivial API calls intercepted locally, saving quota and latency                 |
 | **Smart Rate Limiting**    | Proactive rolling-window throttle + reactive 429 exponential backoff + optional concurrency cap |
-| **Discord / Telegram Bot** | Remote autonomous coding with tree-based threading, session persistence, and live progress      |
+| **Discord / Telegram Bot** | Remote autonomous coding with tree-based threading, live progress, and crash-safe SQLite sessions |
 | **Subagent Control**       | Task tool interception forces `run_in_background=False`. No runaway subagents                   |
 | **Extensible**             | Clean `BaseProvider` and `MessagingPlatform` ABCs. Add new providers or platforms easily        |
 
@@ -423,7 +423,7 @@ Control Claude Code remotely from Discord (or Telegram). Send tasks, watch live 
 **Capabilities:**
 
 - Tree-based message threading: reply to a message to fork the conversation
-- Session persistence across server restarts
+- Crash-safe session persistence in SQLite (WAL mode). Trees, node mappings and the message log survive restarts and unclean shutdowns — see [Session Persistence](#session-persistence) below.
 - Live streaming of thinking tokens, tool calls, and results
 - Unlimited concurrent Claude CLI sessions (concurrency controlled by `PROVIDER_MAX_CONCURRENCY`)
 - Voice notes: send voice messages; they are transcribed and processed as regular prompts
@@ -468,6 +468,43 @@ ALLOWED_TELEGRAM_USER_ID="your_telegram_user_id"
 ```
 
 Get a token from [@BotFather](https://t.me/BotFather); find your user ID via [@userinfobot](https://t.me/userinfobot).
+
+### Session Persistence
+
+The bot stores every conversation tree, node-to-tree mapping and message-id log in a local **SQLite** database with `journal_mode=WAL` and `synchronous=NORMAL`. Writes are committed atomically per call, so an unclean shutdown (kill -9, power loss, container restart) cannot corrupt the store and reopens with all completed work intact.
+
+**Where the file lives.** The path is controlled by the constructor argument that messaging code passes to `SessionStore`. With the default configuration the database lands next to the running process as `sessions.sqlite` (plus `sessions.sqlite-wal` and `sessions.sqlite-shm` while the bot is running — these are normal SQLite WAL artifacts, do not delete them). To pin the location explicitly, run the server from a fixed working directory or symlink `sessions.sqlite` to where you want it.
+
+**Migration from older versions.** If you are upgrading from a release that used a JSON file (`sessions.json`), the first start automatically migrates the data:
+
+1. The JSON file is read and validated.
+2. A `sessions.sqlite.tmp` is built in a single transaction.
+3. The temp file is `os.rename`'d to `sessions.sqlite` (atomic on POSIX).
+4. The original `sessions.json` is copied to `sessions.json.bak` (kept as a safety net — never deleted automatically).
+
+If a `sessions.sqlite` already exists next to the legacy `sessions.json`, migration is skipped and the SQLite file wins. To force a re-migration, move both `sessions.sqlite*` files away first.
+
+**Inspecting the store.** Because it is plain SQLite, you can open it with any tool while the bot is running (WAL mode allows concurrent readers):
+
+```bash
+sqlite3 sessions.sqlite '.tables'
+# message_log  node_to_tree  trees
+
+sqlite3 sessions.sqlite 'SELECT root_id, length(data) FROM trees;'
+sqlite3 sessions.sqlite 'SELECT chat_key, COUNT(*) FROM message_log GROUP BY chat_key;'
+```
+
+The `trees` table stores each conversation tree as a JSON blob keyed by `root_id`. `node_to_tree` is a flat lookup from any node id to its tree root. `message_log` keeps the platform message ids the bot needs for `/clear` to delete its own past messages.
+
+**Trimming the message log.** The log grows over the lifetime of a chat. Set `MAX_MESSAGE_LOG_ENTRIES_PER_CHAT` in `.env` to cap it per chat (oldest entries are dropped on insert):
+
+```dotenv
+MAX_MESSAGE_LOG_ENTRIES_PER_CHAT=2000
+```
+
+Unset (the default) means unlimited.
+
+**Resetting state.** From a chat, send `/clear` to wipe trees, mappings and the message log via the bot. Out-of-band, stop the bot and delete `sessions.sqlite*` to start completely fresh.
 
 ### Voice Notes
 
@@ -541,6 +578,7 @@ Configure via `WHISPER_DEVICE` (`cpu` | `cuda` | `nvidia_nim`) and `WHISPER_MODE
 | `ALLOWED_DIR`              | Allowed directories for the agent                                                                                                                                  | `""`                |
 | `MESSAGING_RATE_LIMIT`     | Messaging messages per window                                                                                                                                      | `1`                 |
 | `MESSAGING_RATE_WINDOW`    | Messaging window (seconds)                                                                                                                                         | `1`                 |
+| `MAX_MESSAGE_LOG_ENTRIES_PER_CHAT` | Cap stored message-id log per chat (oldest entries dropped on insert). Empty = unlimited. See [Session Persistence](#session-persistence)                 | `""`                |
 | `VOICE_NOTE_ENABLED`       | Enable voice note handling                                                                                                                                         | `true`              |
 | `WHISPER_DEVICE`           | `cpu` \| `cuda` \| `nvidia_nim`                                                                                                                                    | `cpu`               |
 | `WHISPER_MODEL`            | Whisper model (local: `tiny`/`base`/`small`/`medium`/`large-v2`/`large-v3`/`large-v3-turbo`; NIM: `openai/whisper-large-v3`, `nvidia/parakeet-ctc-1.1b-asr`, etc.) | `base`              |
