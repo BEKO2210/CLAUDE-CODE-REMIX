@@ -47,5 +47,8 @@ jobs:
       - name: Type check
         run: uv run ty check
 
-      - name: Run tests
-        run: uv run pytest -v --tb=short
+      - name: Run tests with coverage
+        run: >
+          uv run pytest -v --tb=short
+          --cov=api --cov=cli --cov=config --cov=messaging --cov=providers
+          --cov-report=term-missing --cov-fail-under=85

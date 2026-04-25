@@ -22,7 +22,7 @@ from loguru import logger
 def _safe_json_dumps(obj: Any) -> str:
     try:
         return json.dumps(obj, indent=2, ensure_ascii=False, sort_keys=True)
-    except Exception:
+    except TypeError, ValueError:
         return str(obj)
 
 

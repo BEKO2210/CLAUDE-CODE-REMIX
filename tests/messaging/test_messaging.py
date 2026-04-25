@@ -1,7 +1,6 @@
 """Tests for messaging/ module."""
 
 import json
-from unittest.mock import patch
 
 import pytest
 
@@ -62,7 +61,7 @@ class TestSessionStore:
         from messaging.session import SessionStore
 
         store = SessionStore(storage_path=str(tmp_path / "sessions.json"))
-        assert store._trees == {}
+        assert store.get_all_trees() == {}
 
     # --- Tree Tests ---
 
@@ -122,23 +121,23 @@ class TestSessionStore:
 
         from messaging.session import SessionStore
 
-        # Should log error and start empty, avoiding crash
+        # Should log error during migration and start empty, avoiding crash
         store = SessionStore(storage_path=str(p))
-        assert store._trees == {}
+        assert store.get_all_trees() == {}
 
-    def test_save_error_handling(self, tmp_path):
-        """Test error during save."""
+    def test_save_durable_after_close_and_reopen(self, tmp_path):
+        """SQLite writes are durable: a saved tree survives close + reopen."""
         from messaging.session import SessionStore
 
-        store = SessionStore(storage_path=str(tmp_path / "sessions.json"))
+        path = str(tmp_path / "sessions.json")
+        store = SessionStore(storage_path=path)
         store.save_tree("r1", {"root_id": "r1", "nodes": {"r1": {}}})
+        store.save_tree("r2", {"root_id": "r2", "nodes": {"r2": {}}})
+        store.close()
 
-        # Mock open to raise exception
-        with patch("builtins.open", side_effect=OSError("Disk full")):
-            store.save_tree("r2", {"root_id": "r2", "nodes": {"r2": {}}})
-
-        # Should log error but not crash. Tree should be in memory.
-        assert "r2" in store._trees
+        store2 = SessionStore(storage_path=path)
+        assert "r1" in store2.get_all_trees()
+        assert "r2" in store2.get_all_trees()
 
 
 class TestTreeQueueManager:
